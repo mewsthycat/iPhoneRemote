@@ -41,7 +41,7 @@ catch covered [below](#every-7-days-free-apple-id).
 
 ### 1. Download the project
 ```powershell
-git clone https://github.com/<you>/iPhoneRemote.git
+git clone https://github.com/mewsthycat/iPhoneRemote.git
 cd iPhoneRemote
 ```
 
