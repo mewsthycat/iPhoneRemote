@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IPhoneRemote.Cli/IPhoneRemote.Cli.csproj" />
+    <Project Path="src/IPhoneRemote.Core/IPhoneRemote.Core.csproj" />
+    <Project Path="src/IPhoneRemote.Viewer/IPhoneRemote.Viewer.csproj" />
+  </Folder>
+</Solution>

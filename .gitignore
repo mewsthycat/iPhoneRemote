@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+.vs/
+*.user
+
+# Downloaded tools, developer images, logs and device-specific data.
+# scripts/setup-wda.ps1 and the app recreate these on each machine.
+tools/
+
+# Written by `iremote wda`
+first-frame.jpg

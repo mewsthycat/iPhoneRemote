@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Deep checkout paths push obj\...\apphost.exe past Windows' 260-char MAX_PATH, and the SDK's
+    CreateAppHost step then fails without a clear error (MSB3030 "apphost.exe not found").
+    When the project lives deep, build into a short folder under %LOCALAPPDATA% instead.
+  -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.Length) &gt; 120">
+    <_ShortBuildRoot>$(LOCALAPPDATA)\iPhoneRemote\build\$(MSBuildProjectName)\</_ShortBuildRoot>
+    <BaseIntermediateOutputPath>$(_ShortBuildRoot)obj\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(_ShortBuildRoot)bin\</BaseOutputPath>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>iPhoneRemote</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Lets the app find tools\ (go-ios, dev images) even though bin\ may live under %LOCALAPPDATA%. -->
+    <AssemblyMetadata Include="RepoRoot" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\IPhoneRemote.Core\IPhoneRemote.Core.csproj" />
+  </ItemGroup>
+</Project>
