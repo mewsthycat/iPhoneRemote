@@ -19,6 +19,7 @@ public sealed class UsbmuxClient : IDisposable
     private const int ProtocolVersionPlist = 1;
     private const int MessageTypePlist = 8;
     private const int HeaderSize = 16;
+    private const int MaxPacketSize = 16 * 1024 * 1024; // device lists and pair records are a few KB
 
     private readonly TcpClient _tcp;
     private readonly NetworkStream _stream;
@@ -151,6 +152,8 @@ public sealed class UsbmuxClient : IDisposable
         await _stream.ReadExactlyAsync(header, ct);
         var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(0));
         var tag = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(12));
+        if (length < HeaderSize || length > MaxPacketSize)
+            throw new IOException($"usbmux sent a malformed packet (length {length})");
         var body = new byte[length - HeaderSize];
         await _stream.ReadExactlyAsync(body, ct);
         return (tag, (NSDictionary)PropertyListParser.Parse(body));

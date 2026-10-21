@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using IPhoneRemote.Core.Lockdown;
 using IPhoneRemote.Core.Usbmux;
 using IPhoneRemote.Core.Wda;
@@ -54,7 +55,9 @@ try
                 using var wda = new WdaClient(new Uri("http://127.0.0.1:8100"));
                 await wda.CreateSessionAsync(ct);
                 var sw = Stopwatch.StartNew();
-                await wda.TapAsync(double.Parse(args[1]), double.Parse(args[2]), ct);
+                // Invariant: "195.5" must parse the same on decimal-comma locales.
+                await wda.TapAsync(double.Parse(args[1], CultureInfo.InvariantCulture),
+                                   double.Parse(args[2], CultureInfo.InvariantCulture), ct);
                 Console.WriteLine($"Tapped in {sw.ElapsedMilliseconds} ms");
             }
             break;

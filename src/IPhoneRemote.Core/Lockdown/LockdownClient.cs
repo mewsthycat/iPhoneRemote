@@ -16,6 +16,7 @@ public sealed class LockdownClient : IDisposable
 {
     public const int Port = 62078;
     private const string Label = "iPhoneRemote";
+    private const int MaxMessageSize = 16 * 1024 * 1024;
 
     private Stream _stream;
     private string? _sessionId;
@@ -25,12 +26,23 @@ public sealed class LockdownClient : IDisposable
     public static async Task<LockdownClient> ConnectAsync(UsbmuxDevice device, CancellationToken ct = default)
     {
         var mux = await UsbmuxClient.ConnectAsync(ct: ct);
-        var stream = await mux.ConnectToDeviceAsync(device.DeviceId, Port, ct);
+        Stream stream;
+        try { stream = await mux.ConnectToDeviceAsync(device.DeviceId, Port, ct); }
+        catch { mux.Dispose(); throw; }
+
         var client = new LockdownClient(stream);
-        var type = await client.RequestAsync(new NSDictionary { { "Request", "QueryType" } }, ct);
-        if (((NSString)type["Type"]).Content != "com.apple.mobile.lockdown")
-            throw new IOException("Unexpected lockdown QueryType response");
-        return client;
+        try
+        {
+            var type = await client.RequestAsync(new NSDictionary { { "Request", "QueryType" } }, ct);
+            if ((type.TryGetValue("Type", out var t) ? t.ToString() : null) != "com.apple.mobile.lockdown")
+                throw new IOException("Unexpected lockdown QueryType response");
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Read a lockdown value. Pass null key to get the whole (domain) dictionary.</summary>
@@ -89,7 +101,10 @@ public sealed class LockdownClient : IDisposable
         await _stream.FlushAsync(ct);
 
         await _stream.ReadExactlyAsync(header, ct);
-        var reply = new byte[BinaryPrimitives.ReadInt32BigEndian(header)];
+        var length = BinaryPrimitives.ReadInt32BigEndian(header);
+        if (length is < 0 or > MaxMessageSize)
+            throw new IOException($"lockdown sent a malformed message (length {length})");
+        var reply = new byte[length];
         await _stream.ReadExactlyAsync(reply, ct);
         var dict = (NSDictionary)PropertyListParser.Parse(reply);
         if (dict.TryGetValue("Error", out var err))

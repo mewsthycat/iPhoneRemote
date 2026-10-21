@@ -10,11 +10,11 @@
 param([switch]$CreateShortcut, [switch]$Rebuild)
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName PresentationFramework
 $root = Split-Path -Parent $PSScriptRoot
 $proj = Join-Path $root 'src\IPhoneRemote.Viewer\IPhoneRemote.Viewer.csproj'
 
 function Fail([string]$message) {
+    Add-Type -AssemblyName PresentationFramework # loaded only when needed: it costs ~0.7 s
     [System.Windows.MessageBox]::Show($message, 'iPhone Remote', 'OK', 'Error') | Out-Null
     exit 1
 }
@@ -22,10 +22,6 @@ function Fail([string]$message) {
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Fail '.NET SDK not found. Install the .NET 10 SDK from https://dot.net, then try again.'
 }
-
-# Where the Release exe lives (bin may be redirected to %LOCALAPPDATA% by Directory.Build.props).
-$targetPath = (& dotnet msbuild $proj -nologo '-getProperty:TargetPath' '-p:Configuration=Release' | Select-Object -Last 1).Trim()
-$exe = [IO.Path]::ChangeExtension($targetPath, '.exe')
 
 if ($CreateShortcut) {
     $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'iPhone Remote.lnk'
@@ -47,6 +43,21 @@ $running = Get-Process iPhoneRemote -ErrorAction SilentlyContinue | Select-Objec
 if ($running) {
     (New-Object -ComObject WScript.Shell).AppActivate($running.Id) | Out-Null
     exit 0
+}
+
+# Where the Release exe lives (bin may be redirected to %LOCALAPPDATA% by Directory.Build.props).
+# Asking MSBuild takes ~2 s, so cache the answer per checkout folder; a moved checkout re-asks.
+$cacheFile = Join-Path $env:LOCALAPPDATA 'iPhoneRemote\launch-cache.txt'
+$exe = $null
+if (Test-Path $cacheFile) {
+    $cached = Get-Content $cacheFile -TotalCount 2
+    if ($cached.Count -eq 2 -and $cached[0] -eq $root) { $exe = $cached[1] }
+}
+if (-not $exe) {
+    $targetPath = (& dotnet msbuild $proj -nologo '-getProperty:TargetPath' '-p:Configuration=Release' | Select-Object -Last 1).Trim()
+    $exe = [IO.Path]::ChangeExtension($targetPath, '.exe')
+    New-Item -ItemType Directory -Force (Split-Path $cacheFile) | Out-Null
+    Set-Content $cacheFile -Value $root, $exe -Encoding UTF8
 }
 
 # Rebuild only when a source file is newer than the exe, so normal launches are instant.

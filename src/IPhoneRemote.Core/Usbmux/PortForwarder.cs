@@ -38,10 +38,12 @@ public sealed class PortForwarder(UsbmuxDevice device, int localPort, int device
         local.NoDelay = true;
         using (local)
         {
+            UsbmuxClient? mux = null;
             try
             {
-                var mux = await UsbmuxClient.ConnectAsync(ct: ct);
+                mux = await UsbmuxClient.ConnectAsync(ct: ct);
                 await using var remote = await mux.ConnectToDeviceAsync(device.DeviceId, devicePort, ct);
+                mux = null; // the returned stream owns the socket from here on
                 var localStream = local.GetStream();
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var up = localStream.CopyToAsync(remote, linked.Token);
@@ -49,9 +51,15 @@ public sealed class PortForwarder(UsbmuxDevice device, int localPort, int device
                 await Task.WhenAny(up, down);
                 linked.Cancel();
             }
-            catch (Exception ex) when (ex is IOException or OperationCanceledException or SocketException)
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or SocketException
+                                           or InvalidOperationException)
             {
                 Console.Error.WriteLine($"[forward {localPort}->{devicePort}] {ex.Message}");
+            }
+            finally
+            {
+                // Connect is refused while WDA isn't up yet (polled every second), so this path is hot.
+                mux?.Dispose();
             }
         }
     }

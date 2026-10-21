@@ -76,8 +76,10 @@ public sealed class WdaClient(Uri baseUri) : IDisposable
         ], ct);
 
     /// <summary>Types into the currently focused field.</summary>
+    // WDA joins the array before typing, so one element is equivalent to one per character,
+    // and it keeps surrogate pairs (emoji) intact instead of splitting them into broken halves.
     public Task TypeAsync(string text, CancellationToken ct = default) =>
-        PostAsync($"/session/{Sid}/wda/keys", new { value = text.Select(c => c.ToString()).ToArray() }, ct);
+        PostAsync($"/session/{Sid}/wda/keys", new { value = new[] { text } }, ct);
 
     public Task HomeAsync(CancellationToken ct = default) => PostAsync("/wda/homescreen", new { }, ct);
 

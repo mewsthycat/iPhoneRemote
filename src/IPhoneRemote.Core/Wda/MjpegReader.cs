@@ -10,7 +10,13 @@ public static class MjpegReader
 {
     private const byte Marker = 0xFF, Soi = 0xD8, Eoi = 0xD9;
 
-    public static async IAsyncEnumerable<byte[]> ReadFramesAsync(
+    /// <summary>
+    /// Yields each JPEG frame. The memory is reused for the next frame, so it is only valid
+    /// until the loop asks for the next one: decode or copy it before continuing.
+    /// (Frames are ~200 KB, so a fresh array per frame would land on the large-object heap
+    /// at 30 fps and force frequent full garbage collections.)
+    /// </summary>
+    public static async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadFramesAsync(
         Uri streamUri, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -53,7 +59,7 @@ public static class MjpegReader
                     inFrame = false;
                     pos = eoi + 1;
                     prev = Eoi;
-                    yield return frame.AsSpan(0, frameLength).ToArray();
+                    yield return frame.AsMemory(0, frameLength);
                 }
             }
             prev = buffer[n - 1];

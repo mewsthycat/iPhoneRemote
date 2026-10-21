@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -15,7 +16,7 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
     private readonly string _tools = Path.Combine(FindRepoRoot(), "tools");
     private Process? _tunnel;
     private Process? _runwda;
-    private readonly List<StreamWriter> _logs = [];
+    private readonly Dictionary<string, StreamWriter> _logs = [];
 
     private string Ios => Path.Combine(_tools, "go-ios", "ios.exe");
     private string LogDir => Path.Combine(_tools, "logs");
@@ -56,6 +57,7 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
             var pairDir = Path.Combine(_tools, "tunnel-pairrecords");
             Directory.CreateDirectory(pairDir);
             // --userspace: no admin rights or wintun driver needed.
+            _tunnel?.Dispose(); // the previous, exited process
             _tunnel = StartBackground(Ios, ["tunnel", "start", "--userspace", $"--pair-record-path={pairDir}"], "tunnel.log");
         }
         for (var i = 0; i < 30; i++)
@@ -81,7 +83,16 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
 
         // go-ios can't verify gs.apple.com on Windows (Apple's root CA isn't in the Windows store);
         // pymobiledevice3 requests the same signature over plain HTTP. The phone checks Apple's signature itself.
-        var (pyCode, _) = await RunAsync("py", ["-m", "pymobiledevice3", "mounter", "auto-mount"], TimeSpan.FromMinutes(3), ct);
+        int pyCode;
+        try
+        {
+            (pyCode, _) = await RunAsync("py", ["-m", "pymobiledevice3", "mounter", "auto-mount"], TimeSpan.FromMinutes(3), ct);
+        }
+        catch (Win32Exception)
+        {
+            throw new IOException("Couldn't mount the developer image: Python isn't installed. " +
+                                  "Install it from python.org, then run: py -m pip install pymobiledevice3");
+        }
         if (pyCode != 0)
             throw new IOException("Couldn't mount the developer image. Install the fallback with: py -m pip install pymobiledevice3");
     }
@@ -91,6 +102,7 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
         if (_runwda is { HasExited: false }) return;
         var id = settings.WdaBundleId ?? await FindWdaBundleIdAsync(ct);
         settings.WdaBundleId = id;
+        _runwda?.Dispose(); // the previous, exited process
         _runwda = StartBackground(Ios,
             ["runwda", $"--bundleid={id}", $"--testrunnerbundleid={id}", "--xctestconfig=WebDriverAgentRunner.xctest"],
             "runwda.log");
@@ -102,7 +114,8 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
         var json = output.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.StartsWith('['));
         if (json != null)
         {
-            foreach (var app in JsonDocument.Parse(json).RootElement.EnumerateArray())
+            using var doc = JsonDocument.Parse(json);
+            foreach (var app in doc.RootElement.EnumerateArray())
             {
                 var id = app.TryGetProperty("CFBundleIdentifier", out var b) ? b.GetString() : null;
                 if (id?.Contains("WebDriverAgent", StringComparison.OrdinalIgnoreCase) == true) return id;
@@ -116,7 +129,7 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
 
     public bool WdaProcessExited => _runwda is { HasExited: true };
 
-    private Process StartBackground(string file, string[] args, string logName)
+    private static ProcessStartInfo HiddenStartInfo(string file, string[] args)
     {
         var psi = new ProcessStartInfo(file)
         {
@@ -126,9 +139,19 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
             RedirectStandardError = true,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
-        var log = new StreamWriter(Path.Combine(LogDir, logName), append: false) { AutoFlush = true };
-        _logs.Add(log);
-        var p = new Process { StartInfo = psi };
+        return psi;
+    }
+
+    private Process StartBackground(string file, string[] args, string logName)
+    {
+        // A restart (e.g. WDA after a cable blip) reuses the log name: close the previous
+        // writer first, or opening the file again fails with "being used by another process".
+        if (_logs.Remove(logName, out var previous))
+            lock (previous) previous.Dispose();
+        var stream = new FileStream(Path.Combine(LogDir, logName), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+        var log = new StreamWriter(stream) { AutoFlush = true };
+        _logs[logName] = log;
+        var p = new Process { StartInfo = HiddenStartInfo(file, args) };
         // Output callbacks can still arrive after the process exits, so the writer lives until Dispose().
         void Write(string? line)
         {
@@ -149,15 +172,7 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
 
     private static async Task<(int ExitCode, string Output)> RunAsync(string file, string[] args, TimeSpan timeout, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo(file)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
+        using var p = Process.Start(HiddenStartInfo(file, args))!;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
         var stdout = p.StandardOutput.ReadToEndAsync(cts.Token);
@@ -187,6 +202,6 @@ public sealed class WdaLauncher(AppSettings settings) : IDisposable
             catch (InvalidOperationException) { }
             p?.Dispose();
         }
-        foreach (var log in _logs) lock (log) log.Dispose();
+        foreach (var log in _logs.Values) lock (log) log.Dispose();
     }
 }

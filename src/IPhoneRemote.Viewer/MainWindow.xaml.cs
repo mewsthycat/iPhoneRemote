@@ -149,9 +149,12 @@ public partial class MainWindow : Window
 
     private async Task WaitForRetryAsync(TimeSpan delay)
     {
-        _retryWait = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
-        try { await Task.Delay(delay, _retryWait.Token); }
+        var wait = _retryWait = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+        try { await Task.Delay(delay, wait.Token); }
         catch (OperationCanceledException) { }
+        // Each attempt registers on _closing; dispose so failed retries don't accumulate.
+        _retryWait = null;
+        wait.Dispose();
     }
 
     private void OnRetry(object sender, RoutedEventArgs e) => Reconnect();
@@ -203,14 +206,16 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or HttpRequestException) { } // stream dropped → reconnect
     }
 
-    private static BitmapSource? Decode(byte[] jpeg)
+    /// <summary>Decodes synchronously (OnLoad), so the reader may reuse the buffer afterwards.</summary>
+    private static BitmapSource? Decode(ReadOnlyMemory<byte> jpeg)
     {
+        if (!MemoryMarshal.TryGetArray(jpeg, out var segment)) return null;
         try
         {
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = new MemoryStream(jpeg, writable: false);
+            bmp.StreamSource = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
             bmp.EndInit();
             bmp.Freeze(); // allows handing it to the UI thread
             return bmp;
@@ -284,7 +289,7 @@ public partial class MainWindow : Window
         {
             _dragLine = new Line
             {
-                Stroke = new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)),
+                Stroke = DragBrush,
                 StrokeThickness = 6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
                 X1 = _downPixels.X, Y1 = _downPixels.Y,
             };
@@ -296,10 +301,11 @@ public partial class MainWindow : Window
 
     private void OnMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_session == null || !Screen.IsMouseCaptured) return;
-        Screen.ReleaseMouseCapture();
+        if (!Screen.IsMouseCaptured) return;
+        Screen.ReleaseMouseCapture(); // even if the connection dropped mid-drag
         FadeOut(_dragLine);
         _dragLine = null;
+        if (_session == null) return;
 
         var up = ToPoints(e.GetPosition(Screen));
         var heldMs = (int)_downClock.ElapsedMilliseconds;
@@ -340,7 +346,19 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>A soft ripple where the click landed, so taps feel instant despite WDA's ~0.5 s round trip.</summary>
+    // Shared, frozen brushes: frozen brushes are thread-safe and skip change tracking.
+    private static readonly Brush DragBrush = Frozen(Color.FromArgb(150, 255, 255, 255));
+    private static readonly Brush TouchFill = Frozen(Color.FromArgb(90, 255, 255, 255));
+    private static readonly Brush TouchStroke = Frozen(Color.FromArgb(200, 255, 255, 255));
+
+    private static Brush Frozen(Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+
+    /// <summary>A soft ripple where the click landed, so taps feel instant despite WDA's ~0.6 s round trip.</summary>
     private void ShowTouch(Point at)
     {
         if (!_settings.ShowTouches) return;
@@ -348,8 +366,8 @@ public partial class MainWindow : Window
         var dot = new Ellipse
         {
             Width = size, Height = size,
-            Fill = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
-            Stroke = new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)), StrokeThickness = 1.5,
+            Fill = TouchFill,
+            Stroke = TouchStroke, StrokeThickness = 1.5,
             RenderTransformOrigin = new Point(0.5, 0.5),
             RenderTransform = new ScaleTransform(0.6, 0.6),
         };
@@ -480,7 +498,9 @@ public partial class MainWindow : Window
         var png = await w.ScreenshotPngAsync();
         var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "iPhone Remote");
         Directory.CreateDirectory(dir);
-        var file = System.IO.Path.Combine(dir, $"iPhone {DateTime.Now:yyyy-MM-dd HH.mm.ss}.png");
+        var stem = System.IO.Path.Combine(dir, $"iPhone {DateTime.Now:yyyy-MM-dd HH.mm.ss}");
+        var file = stem + ".png";
+        for (var n = 2; File.Exists(file); n++) file = $"{stem} ({n}).png"; // two shots in one second
         await File.WriteAllBytesAsync(file, png);
         await Dispatcher.InvokeAsync(() =>
         {
@@ -489,15 +509,34 @@ public partial class MainWindow : Window
             img.CacheOption = BitmapCacheOption.OnLoad;
             img.StreamSource = new MemoryStream(png);
             img.EndInit();
-            Clipboard.SetImage(img);
-            ShowToast("Screenshot saved to Pictures\\iPhone Remote and copied");
+            img.Freeze();
+            try
+            {
+                Clipboard.SetImage(img);
+                ShowToast("Screenshot saved to Pictures\\iPhone Remote and copied");
+            }
+            catch (COMException)
+            {
+                // Another app has the clipboard open; the file is saved regardless.
+                ShowToast("Screenshot saved to Pictures\\iPhone Remote (clipboard was busy)");
+            }
         });
     });
 
     private void OnPaste(object sender, RoutedEventArgs e)
     {
-        if (!Clipboard.ContainsText()) { ShowToast("Clipboard has no text"); return; }
-        var text = Clipboard.GetText();
+        string text;
+        try
+        {
+            if (!Clipboard.ContainsText()) { ShowToast("Clipboard has no text"); return; }
+            text = Clipboard.GetText();
+        }
+        catch (COMException)
+        {
+            // Clipboard locked by another app. Unhandled here, this would crash the window.
+            ShowToast("The clipboard is busy. Try again.");
+            return;
+        }
         Send("paste", w => w.TypeAsync(text));
     }
 

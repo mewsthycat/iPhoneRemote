@@ -134,7 +134,8 @@ public sealed class DeviceSession : IAsyncDisposable
         }
     }
 
-    public IAsyncEnumerable<byte[]> FramesAsync(CancellationToken ct) =>
+    /// <summary>JPEG frames; each is only valid until the next one is requested (see MjpegReader).</summary>
+    public IAsyncEnumerable<ReadOnlyMemory<byte>> FramesAsync(CancellationToken ct) =>
         MjpegReader.ReadFramesAsync(new Uri($"http://127.0.0.1:{MjpegPort}"), ct);
 
     public void Enqueue(string label, Func<WdaClient, Task> action) => _input.Writer.TryWrite((label, action));
@@ -168,6 +169,7 @@ public sealed class DeviceSession : IAsyncDisposable
                 {
                     error = ex;
                 }
+                if (_cts.IsCancellationRequested) break; // session closing: don't report its aborted input
                 InputCompleted?.Invoke(label, sw.ElapsedMilliseconds, error);
             }
         }
@@ -178,8 +180,10 @@ public sealed class DeviceSession : IAsyncDisposable
     {
         _input.Writer.TryComplete();
         _cts.Cancel();
-        await _inputLoop;
+        // Disposing the client aborts an in-flight request; otherwise a slow phone would
+        // hold up Reconnect (F5) for up to the 30 s request timeout.
         _wda.Dispose();
+        await _inputLoop;
         await _http.DisposeAsync();
         await _mjpeg.DisposeAsync();
         _cts.Dispose();
