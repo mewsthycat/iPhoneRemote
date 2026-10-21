@@ -224,4 +224,8 @@ For development, run the viewer with `dotnet run --project src/IPhoneRemote.View
 - [plist-cil](https://github.com/claunia/plist-cil): property list parsing
 - [Sideloadly](https://sideloadly.io): signing with a regular Apple ID
 
+## License
+[MIT](LICENSE). The tools the setup script downloads (go-ios, WebDriverAgent, Apple's developer
+disk image) keep their own licenses.
+
 Not affiliated with or endorsed by Apple. iPhone and iOS are trademarks of Apple Inc.
